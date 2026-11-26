@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: VendorSnipe
+## Notes: Scans the Auction House for auctions whose buyout is below the vendor sell price.
+## Author: VendorSnipe
+## Version: 2.9.0
+## SavedVariables: VendorSnipeDB
+
+VendorSnipe_Guide.lua
+VendorSnipe.lua
+VendorSnipe_Sell.lua
