@@ -721,13 +721,22 @@ local function AutoSearchFailed(reason)
   SetState("next", "Search: " .. ItemName(Buy.item))
 end
 
--- Recheck: mark the current item with the live result (has profitable listings or not).
+-- Watch: mark the current item with the live result (has profitable listings or not).
 local function MarkChecked(has)
   local r = Buy.item
   if not r then return end
   if Buy.mode == "bid" then
+    local wasDeal = false
     for _, b in ipairs(bidResults) do
-      if b.itemID == r.itemID then b.done, b.selected, b.soldOut = not has, has, not has end
+      if b.itemID == r.itemID then
+        if not b.done then wasDeal = true end
+        b.done, b.selected, b.soldOut = not has, has, not has
+      end
+    end
+    if has and Buy.watching and not wasDeal then
+      Buy.watchFound = (Buy.watchFound or 0) + 1
+      Print(string.format("|cff40ff40New bid deal:|r %s is worth bidding on again. It's ticked: click Bid Selected.", r.link or ItemName(r)))
+      if PlaySound then pcall(PlaySound, (SOUNDKIT and SOUNDKIT.RAID_WARNING) or 8959, "Master") end
     end
   else
     local wasDeal = byItem[r.itemID] == r and not r.done
@@ -773,20 +782,22 @@ function NextItem()
   Buy.searchAttempts = 1
   if not Buy.item then
     if Buy.watching then
-      -- pass finished: start the next one after a short pause
       Buy.checking = false
       SetState("idle", IdleLabel())
+      if Buy.watchOnce then
+        -- a Full Scan was already possible: one round only (like the old Recheck)
+        Print(string.format("Check done: %d of %d items have profitable listings right now. They are ticked - click %s.",
+          Buy.checkFound or 0, Buy.checkTotal or 0, Buy.mode == "bid" and "Bid Selected" or "Buy Selected"))
+        Buy.watching = false
+        if ui and ui.watchBtn then ui.watchBtn:SetText("Watch") end
+        if ui then ui:Refresh() end
+        return
+      end
+      -- round finished: start the next one after a short pause
       C_Timer.After(5, function() if Buy.watching then StartWatchPass() end end)
       return
     end
-    if Buy.checking then
-      Print(string.format("Recheck done: %d of %d items have profitable listings right now. They are ticked - click %s.",
-        Buy.checkFound or 0, Buy.checkTotal or 0, Buy.mode == "bid" and "Bid Selected" or "Buy Selected"))
-      ResetBuy(true)
-      if ui then ui:Refresh() end
-      return
-    end
-    Print("Done with all selected items. Click Recheck to look for new listings below vendor price without waiting for a Full Scan.")
+    Print("Done with all selected items. Click Watch to keep looking for new listings below vendor price until the next Full Scan.")
     ResetBuy()
     return
   end
@@ -1328,35 +1339,6 @@ local function BuyClick()
   end
 end
 
--- Recheck: live-search every item in the current tab (filters applied), without buying anything.
-local function StartRecheck()
-  if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then Print("Open the Auction House first.") return end
-  if phase == "waiting" or phase == "copying" then Print("Wait until the scan data is copied (a few seconds).") return end
-  if Buy.state ~= "idle" then Print("Finish or Stop the current buying run first.") return end
-  wipe(Buy.queue)
-  Buy.mode = (ui and ui.tab == "bid") and "bid" or "buyout"
-  if Buy.mode == "bid" then
-    local seen = {}
-    for _, b in ipairs(bidResults) do
-      if BidShown(b) and not seen[b.itemID] then
-        seen[b.itemID] = true
-        Buy.queue[#Buy.queue + 1] = { itemID = b.itemID, name = b.name, link = b.link, ilvl = b.ilvl,
-                                      vendor = b.vendor, stack = b.stack }
-      end
-    end
-  else
-    for _, r in ipairs(results) do
-      if ItemShown(r) then Buy.queue[#Buy.queue + 1] = r end
-    end
-  end
-  if #Buy.queue == 0 then Print("The list is empty - run a Full Scan first.") return end
-  Buy.checking, Buy.checkFound, Buy.checkTotal = true, 0, #Buy.queue
-  Buy.spent, Buy.value, Buy.count, Buy.items, Buy.item, Buy.sessionMoney = 0, 0, 0, 0, nil, nil
-  Print(string.format("Rechecking %d items live (nothing is bought)...", #Buy.queue))
-  NextItem()
-  if Buy.item then Buy.auto = false Search() end
-end
-
 -- Watch: keep re-checking the deal list plus near misses live until a Full Scan is possible again.
 local function CooldownLeft()
   return SCAN_COOLDOWN - (time() - (VendorSnipeDB.lastScan or 0))
@@ -1377,24 +1359,39 @@ end
 function StartWatchPass()
   if not Buy.watching then return end
   if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then StopWatch("stopped: Auction House closed") return end
-  if CooldownLeft() <= 0 then StopWatch("cooldown") return end
-  if autoBlocked then StopWatch("stopped: the game ignores automatic searches here") return end
+  if not Buy.watchOnce and CooldownLeft() <= 0 then StopWatch("cooldown") return end
+  if autoBlocked and Buy.watchPass > 0 then StopWatch("stopped: the game ignores automatic searches here") return end
   if Buy.state ~= "idle" then return end
   wipe(Buy.queue)
-  Buy.mode = "buyout"
-  for _, r in ipairs(results) do
-    if ItemShown(r) then Buy.queue[#Buy.queue + 1] = r end
-  end
-  for _, w in ipairs(VendorSnipeDB.watchItems or {}) do
-    if not byItem[w.itemID] and ItemShown(w) then Buy.queue[#Buy.queue + 1] = w end
+  if Buy.mode == "bid" then
+    -- Bid deals tab: one entry per item; the live search finds every auction worth bidding on
+    local seen = {}
+    for _, b in ipairs(bidResults) do
+      if BidShown(b) and not seen[b.itemID] then
+        seen[b.itemID] = true
+        Buy.queue[#Buy.queue + 1] = { itemID = b.itemID, name = b.name, link = b.link, ilvl = b.ilvl,
+                                      vendor = b.vendor, stack = b.stack }
+      end
+    end
+  else
+    for _, r in ipairs(results) do
+      if ItemShown(r) then Buy.queue[#Buy.queue + 1] = r end
+    end
+    for _, w in ipairs(VendorSnipeDB.watchItems or {}) do
+      if not byItem[w.itemID] and ItemShown(w) then Buy.queue[#Buy.queue + 1] = w end
+    end
   end
   if #Buy.queue == 0 then StopWatch("stopped: nothing to watch - run a Full Scan first") return end
   Buy.watchPass = (Buy.watchPass or 0) + 1
   Buy.checking, Buy.checkFound, Buy.checkTotal = true, 0, #Buy.queue
   Buy.spent, Buy.value, Buy.count, Buy.items, Buy.item, Buy.sessionMoney = 0, 0, 0, 0, nil, nil
   local left = CooldownLeft()
-  SetStatus("Watching: pass %d, %d items - %d new deals so far. Full Scan possible in %d:%02d.",
-    Buy.watchPass, #Buy.queue, Buy.watchFound or 0, left / 60, left % 60)
+  if Buy.watchOnce then
+    SetStatus("Checking %d items live (one round, a Full Scan is already possible)...", #Buy.queue)
+  else
+    SetStatus("Watching: round %d, %d items - %d new deals so far. Full Scan possible in %d:%02d.",
+      Buy.watchPass, #Buy.queue, Buy.watchFound or 0, left / 60, left % 60)
+  end
   D("watch pass", Buy.watchPass, "items", #Buy.queue)
   NextItem()
 end
@@ -1408,13 +1405,18 @@ local function ToggleWatch()
   if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then Print("Open the Auction House first.") return end
   if phase == "waiting" or phase == "copying" then Print("Wait until the scan data is copied (a few seconds).") return end
   if Buy.state ~= "idle" then Print("Finish or Stop the current buying run first.") return end
-  if CooldownLeft() <= 0 then Print("A Full Scan is possible right now - do that instead, then start Watch.") return end
-  if ui and ui.tab == "bid" then ui:SetTab("buyout") end
-  local n = #(VendorSnipeDB.watchItems or {})
+  Buy.mode = (ui and ui.tab == "bid") and "bid" or "buyout"
   Buy.watching, Buy.watchPass, Buy.watchFound = true, 0, 0
+  Buy.watchOnce = CooldownLeft() <= 0
   if ui and ui.watchBtn then ui.watchBtn:SetText("Stop watch") end
-  Print(string.format("Watching %d deal items and %d near misses (cheapest listing up to 50%% above vendor price) until the next Full Scan. Nothing is bought; new deals are ticked and announced.",
-    #results, n))
+  if Buy.watchOnce then
+    Print("A Full Scan is possible right now, so Watch checks the list once (nothing is bought). Tip: a new Full Scan finds brand-new items too.")
+  elseif Buy.mode == "bid" then
+    Print(string.format("Watching your bid deals until the next Full Scan. Nothing is bid automatically; items worth bidding on are ticked and announced."))
+  else
+    Print(string.format("Watching %d deal items and %d near misses (cheapest listing up to 50%% above vendor price) until the next Full Scan. Nothing is bought; new deals are ticked and announced.",
+      #results, #(VendorSnipeDB.watchItems or {})))
+  end
   StartWatchPass()
 end
 
@@ -1533,7 +1535,8 @@ local function BuildUI()
   watch:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
     GameTooltip:SetText("Watch until next Full Scan")
-    GameTooltip:AddLine("Keeps checking your Buyout deals and near misses (items just above vendor price) live, over and over, until a Full Scan is allowed again. New deals are ticked, announced with a sound and added to the list. Nothing is bought automatically.", 1, 1, 1, true)
+    GameTooltip:AddLine("Keeps checking the list of the current tab live, round after round, until a Full Scan is allowed again. In Buyout deals it also watches near misses (items just above vendor price). New deals are ticked, announced with a sound and added to the list. Nothing is bought automatically.", 1, 1, 1, true)
+    GameTooltip:AddLine("If a Full Scan is already possible, it checks the list once.", 0.7, 0.7, 0.7, true)
     GameTooltip:Show()
   end)
   watch:SetScript("OnLeave", GameTooltip_Hide)
@@ -1734,22 +1737,6 @@ local function BuildUI()
   local bfs = buy:GetFontString()
   if bfs then bfs:SetWidth(344) bfs:SetWordWrap(false) end   -- long labels end in "..." instead of overflowing
 
-  local recheck = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  recheck:SetSize(104, 26)
-  recheck:SetPoint("BOTTOMLEFT", 14, 10)
-  recheck:SetText("Recheck")
-  recheck:SetScript("OnClick", function()
-    local ok, err = pcall(StartRecheck)
-    if not ok then Print("|cffff4040Error:|r " .. tostring(err)) end
-  end)
-  recheck:SetScript("OnEnter", function(self)
-    GameTooltip:SetOwner(self, "ANCHOR_TOP")
-    GameTooltip:SetText("Recheck list")
-    GameTooltip:AddLine("Checks every item in this tab live again - no need to wait for the next Full Scan. Items with profitable listings right now are un-greyed and ticked; the others show 'none left'. Nothing is bought.", 1, 1, 1, true)
-    GameTooltip:Show()
-  end)
-  recheck:SetScript("OnLeave", GameTooltip_Hide)
-  f.recheck = recheck
 
   local stop = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   stop:SetSize(70, 26)
@@ -1847,6 +1834,7 @@ local function BuildUI()
   end
 
   function f:SetTab(key)
+    if Buy.watching and StopWatch then StopWatch("stopped (tab changed)") end
     if Buy.state ~= "idle" then ResetBuy() end
     f.tab = key
     VendorSnipeDB.tab = key
