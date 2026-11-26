@@ -65,6 +65,7 @@ WoW only allows a purchase from a real mouse click or key press, so no addon can
 - When an item has no profitable listings left, it is greyed out as **done** and the next item starts.
 - **Auto-search** (tick box at the top, on by default): when one item is finished, the next selected item is searched automatically, so almost every click buys something. Untick it, or type `/vs auto`, to search each item with a click. If the game ignores automatic searches, the addon asks for a click instead of skipping the item, and switches auto-search off for the session after two misses.
 - **Recheck** (bottom left): when everything is greyed out, or whenever you like, it checks every item in the current tab live again, without waiting 15 minutes for a Full Scan. Items that have profitable listings right now are un-greyed and ticked, so just click **Buy Selected** / **Bid Selected**. The others show **none left**. Nothing is bought during a recheck. It only finds new listings of items already in the list; brand-new items need a Full Scan.
+- **Watch** (top bar): between Full Scans, keeps checking your Buyout deals plus up to 60 **near misses** (items whose cheapest listing was at most 50% above the vendor price at the scan) live, round after round, with a short pause between searches. When something drops below vendor price you hear a sound, get a **New deal** line in chat, and the item is added to the list and ticked. It stops by itself when a Full Scan is possible again (with a sound), or with **Stop watch** / **Buy Selected** / closing the AH. Watch never buys: click **Buy Selected** for that, then **Watch** again.
 - **Stop** cancels at any time. A summary of money spent, vendor value and profit is printed in chat.
 
 **Tip:** make a macro containing `/click VendorSnipeBuyButton` and bind it to a key. Pressing the key counts as a real key press, so it's faster than clicking.
@@ -127,6 +128,7 @@ WoW only allows a purchase from a real mouse click or key press, so no addon can
 | `/vs stop` | Stop buying |
 | `/vs min 50s` | Set the minimum profit |
 | `/vs tab [both\|off]` | Send messages to a VendorSnipe chat tab (`both` = tab + main chat, `off` = main chat only) |
+| `/vs watch` | Start/stop Watch (re-check deals and near misses until the next Full Scan) |
 | `/vs auto` | Switch auto-search of the next item on/off |
 | `/vs sell [bags]` | Sell all sellable items from the ticked bags, or only the listed bag numbers, e.g. `/vs sell 0 2` (vendor must be open, asks first) |
 | `/vs why [item]` | Explain why an item in your bags is or isn't sold by Sell All |

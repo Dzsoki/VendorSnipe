@@ -364,10 +364,19 @@ local function WipeSnap()
 end
 
 -- Evaluate snapshot row i for both tabs.
+local WATCH_MARGIN = 1.5        -- near miss: cheapest listing at most 50% above the vendor price
+local WATCH_MAX = 60            -- near misses remembered per scan
+local cheapest = {}             -- itemID -> { unit = cheapest per-item price, info = item info }
+
 local function Evaluate(i, info)
   local itemID, count, buyout, owner = snapID[i], snapCount[i], snapBuyout[i], snapOwner[i]
   if not itemID then return end
   TrackPrice(itemID, count, buyout)
+  if info and buyout and buyout > 0 and count > 0 then
+    local unit = (PriceMode() == "unit") and buyout or (buyout / count)
+    local c = cheapest[itemID]
+    if not c or unit < c.unit then cheapest[itemID] = { unit = unit, info = info } end
+  end
   if buyout and buyout > 0 then Consider(itemID, count, buyout, owner, info) end
   ConsiderBid(itemID, count, buyout, owner, snapMinBid[i], snapInc[i], snapBid[i], snapHigh[i], snapTime[i], info)
 end
@@ -401,6 +410,20 @@ local function Finish()
   phase, scanning = nil, false
   WipeSnap()
   wipe(infoCache); wipe(waiting)
+  -- near misses for Watch: cheapest listing just above the vendor price
+  local near = {}
+  for itemID, c in pairs(cheapest) do
+    local vendor = c.info[1]
+    if not byItem[itemID] and vendor and vendor > 0 and c.unit > vendor and c.unit <= vendor * WATCH_MARGIN then
+      near[#near + 1] = { itemID = itemID, name = c.info[2], link = c.info[3], quality = c.info[4], icon = c.info[5],
+                          ilvl = c.info[6], stack = c.info[7], vendor = vendor, ratio = c.unit / vendor,
+                          qty = 0, cost = 0, profit = 0, auctions = 0, bestUnit = c.unit, nearMiss = true }
+    end
+  end
+  table.sort(near, function(a, b) return a.ratio < b.ratio end)
+  for i = #near, WATCH_MAX + 1, -1 do near[i] = nil end
+  VendorSnipeDB.watchItems = near
+  wipe(cheapest)
   local before = PriceMode()
   local mode, vT, vU = DetectPriceMode()
   D("price reading votes: per stack", vT, "per item", vU, "->", tostring(mode))
@@ -549,6 +572,7 @@ local function CopyChunk()
 end
 
 local ResetBuy -- forward declaration
+local StartWatchPass, StopWatch -- forward declarations (Watch mode, defined further below)
 
 local function StartScan()
   if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then
@@ -573,7 +597,7 @@ local function StartScan()
   wipe(prevBidKeys)
   for _, b in ipairs(bidResults) do prevBidKeys[BidKey(b.itemID, b.qty, b.bid, b.buyout)] = true end
   fpBuyout, fpBid = 0, 0
-  wipe(priceStats)
+  wipe(priceStats); wipe(cheapest)
   wipe(results); wipe(byItem); wipe(bidResults)
   WipeSnap()
   scanning, phase, pending, scanIndex, scanTotal, copyIndex, snapN = true, "waiting", 0, 1, 0, 0, 0
@@ -649,6 +673,7 @@ ResetBuy = function(silent)
   Buy.spent, Buy.value, Buy.count, Buy.items = 0, 0, 0, 0
   Buy.sessionMoney, Buy.inflight, Buy.money, Buy.confirmWait = nil, nil, nil, nil
   Buy.checking = false
+  if Buy.watching and StopWatch then StopWatch("stopped") end
   SetState("idle", IdleLabel())
 end
 
@@ -670,9 +695,23 @@ local function AutoSearchOn()
   return VendorSnipeDB.autoSearch ~= false and not autoBlocked
 end
 
+local NextItem -- forward declaration
+
 local function AutoSearchFailed(reason)
   autoFails = autoFails + 1
   Buy.auto = false
+  if Buy.watching then
+    if autoFails >= 2 then
+      autoBlocked = true
+      StopWatch("stopped: the game ignores automatic searches here (" .. reason .. ")")
+      ResetBuy(true)
+    else
+      D("watch: no answer for", ItemName(Buy.item), "- skipping it this pass")
+      Buy.checkedThis = true      -- don't mark it as sold out, we simply don't know
+      NextItem()
+    end
+    return
+  end
   if autoFails >= 2 then
     autoBlocked = true
     Print("Automatic search doesn't seem to work here (" .. reason .. "). Switched it off for this session; click to search.")
@@ -691,13 +730,28 @@ local function MarkChecked(has)
       if b.itemID == r.itemID then b.done, b.selected, b.soldOut = not has, has, not has end
     end
   else
+    local wasDeal = byItem[r.itemID] == r and not r.done
     r.done, r.selected, r.soldOut = not has, has, not has
+    if has and not byItem[r.itemID] then
+      -- a near miss became a deal: add it to the Buyout deals list
+      r.nearMiss = nil
+      byItem[r.itemID] = r
+      results[#results + 1] = r
+      table.sort(results, function(a, b) return a.profit > b.profit end)
+    end
+    if has and Buy.watching and not wasDeal then
+      Buy.watchFound = (Buy.watchFound or 0) + 1
+      Print(string.format("|cff40ff40New deal:|r %s - %d below vendor price, profit %s. It's ticked: click Buy Selected.",
+        r.link or ItemName(r), r.qty or 0, Money(r.profit or 0)))
+      if PlaySound then pcall(PlaySound, (SOUNDKIT and SOUNDKIT.RAID_WARNING) or 8959, "Master") end
+    end
   end
   if has then Buy.checkFound = (Buy.checkFound or 0) + 1 end
   Buy.checkedThis = true
 end
 
-local function NextItem()
+
+function NextItem()
   if Buy.item and Buy.checking then
     if not Buy.checkedThis then MarkChecked(false) end   -- search ended without listings
     if ui then ui:Refresh() end
@@ -718,6 +772,13 @@ local function NextItem()
   Buy.browsed, Buy.variants, Buy.waitSend = false, false, nil
   Buy.searchAttempts = 1
   if not Buy.item then
+    if Buy.watching then
+      -- pass finished: start the next one after a short pause
+      Buy.checking = false
+      SetState("idle", IdleLabel())
+      C_Timer.After(5, function() if Buy.watching then StartWatchPass() end end)
+      return
+    end
     if Buy.checking then
       Print(string.format("Recheck done: %d of %d items have profitable listings right now. They are ticked - click %s.",
         Buy.checkFound or 0, Buy.checkTotal or 0, Buy.mode == "bid" and "Bid Selected" or "Buy Selected"))
@@ -730,9 +791,10 @@ local function NextItem()
     return
   end
   SetState("next", "Search: " .. ItemName(Buy.item))
-  if AutoSearchOn() then
+  if AutoSearchOn() or (Buy.watching and not autoBlocked) then
     local item = Buy.item
-    C_Timer.After(0, function()
+    -- Watch: pause between searches so the Auction House doesn't start throttling
+    C_Timer.After(Buy.watching and 1.5 or 0, function()
       if Buy.state ~= "next" or Buy.item ~= item then return end
       Buy.auto = true
       local ok, err = pcall(Search)
@@ -1167,6 +1229,12 @@ local function BuyClick()
   if phase == "waiting" or phase == "copying" then Print("Wait until the scan data is copied (a few seconds).") return end
   local st = Buy.state
   D("Buy click, state:", st)
+  if Buy.watching and (st == "idle" or Buy.checking) then
+    -- buying needs your clicks: stop watching first, then buy what's ticked
+    StopWatch("paused for buying - click Watch again afterwards")
+    if Buy.state ~= "idle" then ResetBuy(true) end
+    st = Buy.state
+  end
   if st == "idle" then
     wipe(Buy.queue)
     Buy.checking = false
@@ -1289,6 +1357,67 @@ local function StartRecheck()
   if Buy.item then Buy.auto = false Search() end
 end
 
+-- Watch: keep re-checking the deal list plus near misses live until a Full Scan is possible again.
+local function CooldownLeft()
+  return SCAN_COOLDOWN - (time() - (VendorSnipeDB.lastScan or 0))
+end
+
+function StopWatch(reason)
+  if not Buy.watching then return end
+  Buy.watching = false
+  if ui and ui.watchBtn then ui.watchBtn:SetText("Watch") end
+  if reason == "cooldown" then
+    Print(string.format("Full Scan is available again - Watch stopped (%d new deals found while watching).", Buy.watchFound or 0))
+    if PlaySound then pcall(PlaySound, (SOUNDKIT and SOUNDKIT.READY_CHECK) or 8960, "Master") end
+  else
+    Print(string.format("Watch %s (%d new deals found).", reason or "stopped", Buy.watchFound or 0))
+  end
+end
+
+function StartWatchPass()
+  if not Buy.watching then return end
+  if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then StopWatch("stopped: Auction House closed") return end
+  if CooldownLeft() <= 0 then StopWatch("cooldown") return end
+  if autoBlocked then StopWatch("stopped: the game ignores automatic searches here") return end
+  if Buy.state ~= "idle" then return end
+  wipe(Buy.queue)
+  Buy.mode = "buyout"
+  for _, r in ipairs(results) do
+    if ItemShown(r) then Buy.queue[#Buy.queue + 1] = r end
+  end
+  for _, w in ipairs(VendorSnipeDB.watchItems or {}) do
+    if not byItem[w.itemID] and ItemShown(w) then Buy.queue[#Buy.queue + 1] = w end
+  end
+  if #Buy.queue == 0 then StopWatch("stopped: nothing to watch - run a Full Scan first") return end
+  Buy.watchPass = (Buy.watchPass or 0) + 1
+  Buy.checking, Buy.checkFound, Buy.checkTotal = true, 0, #Buy.queue
+  Buy.spent, Buy.value, Buy.count, Buy.items, Buy.item, Buy.sessionMoney = 0, 0, 0, 0, nil, nil
+  local left = CooldownLeft()
+  SetStatus("Watching: pass %d, %d items - %d new deals so far. Full Scan possible in %d:%02d.",
+    Buy.watchPass, #Buy.queue, Buy.watchFound or 0, left / 60, left % 60)
+  D("watch pass", Buy.watchPass, "items", #Buy.queue)
+  NextItem()
+end
+
+local function ToggleWatch()
+  if Buy.watching then
+    StopWatch("stopped")
+    if Buy.state ~= "idle" then ResetBuy(true) end
+    return
+  end
+  if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then Print("Open the Auction House first.") return end
+  if phase == "waiting" or phase == "copying" then Print("Wait until the scan data is copied (a few seconds).") return end
+  if Buy.state ~= "idle" then Print("Finish or Stop the current buying run first.") return end
+  if CooldownLeft() <= 0 then Print("A Full Scan is possible right now - do that instead, then start Watch.") return end
+  if ui and ui.tab == "bid" then ui:SetTab("buyout") end
+  local n = #(VendorSnipeDB.watchItems or {})
+  Buy.watching, Buy.watchPass, Buy.watchFound = true, 0, 0
+  if ui and ui.watchBtn then ui.watchBtn:SetText("Stop watch") end
+  Print(string.format("Watching %d deal items and %d near misses (cheapest listing up to 50%% above vendor price) until the next Full Scan. Nothing is bought; new deals are ticked and announced.",
+    #results, n))
+  StartWatchPass()
+end
+
 ---------------------------------------------------------------------------
 -- UI
 ---------------------------------------------------------------------------
@@ -1394,11 +1523,28 @@ local function BuildUI()
   scan:SetText("Full Scan")
   scan:SetScript("OnClick", StartScan)
 
+  local watch = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  watch:SetSize(84, 22)
+  watch:SetText("Watch")
+  watch:SetScript("OnClick", function()
+    local ok, err = pcall(ToggleWatch)
+    if not ok then Print("|cffff4040Error:|r " .. tostring(err)) end
+  end)
+  watch:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+    GameTooltip:SetText("Watch until next Full Scan")
+    GameTooltip:AddLine("Keeps checking your Buyout deals and near misses (items just above vendor price) live, over and over, until a Full Scan is allowed again. New deals are ticked, announced with a sound and added to the list. Nothing is bought automatically.", 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  watch:SetScript("OnLeave", GameTooltip_Hide)
+  f.watchBtn = watch
+
   local help = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   help:SetSize(60, 22)
   help:SetPoint("RIGHT", scan, "LEFT", -6, 0)
   help:SetText("Guide")
   help:SetScript("OnClick", ToggleGuide)
+  watch:SetPoint("RIGHT", help, "LEFT", -6, 0)
 
   -- tabs: Buyout deals / Bid deals
   f.tab = (VendorSnipeDB.tab == "bid") and "bid" or "buyout"
@@ -1823,6 +1969,7 @@ end
 
 function handlers.AUCTION_HOUSE_CLOSED()
   ui:Hide()
+  if Buy.watching then StopWatch("stopped: Auction House closed") end
   if Buy.state ~= "idle" then ResetBuy() end
   if phase == "waiting" then
     -- Keep listening: if the data still arrives it is processed normally.
@@ -2009,6 +2156,8 @@ SlashCmdList.VENDORSNIPE = function(msg)
       Print(VendorSnipeDB.chatMode == "both" and "Messages now go to the VendorSnipe tab AND the main chat window."
         or "Messages now go only to the VendorSnipe chat tab.")
     end
+  elseif cmd == "watch" then
+    ToggleWatch()
   elseif cmd == "auto" then
     VendorSnipeDB.autoSearch = VendorSnipeDB.autoSearch == false
     if VendorSnipeDB.autoSearch then autoBlocked, autoFails = false, 0 end
