@@ -842,15 +842,15 @@ local function ShowOffer()
     NextItem()
     return
   end
-  if o.cost > GetMoney() then
-    Print("Not enough gold for the next purchase (" .. Money(o.cost) .. "). Stopping.")
+  if (o.total or o.cost) > GetMoney() then
+    Print("Not enough gold for the next purchase (" .. Money(o.total or o.cost) .. "). Stopping.")
     ResetBuy()
     return
   end
   if o.kind == "bid" then
     SetState("ready", string.format("Bid %s on %dx %s (%s)", ShortMoney(o.cost), o.qty, ItemName(Buy.item), TIME_LABELS[o.timeLeft] or "?"))
   else
-    SetState("ready", string.format("Buy %dx %s - %s", o.qty, ItemName(Buy.item), ShortMoney(o.cost)))
+    SetState("ready", string.format("Buy %dx %s - %s", o.qty, ItemName(Buy.item), ShortMoney(o.total or o.cost)))
   end
 end
 
@@ -963,10 +963,13 @@ local function OnItemResults()
       local q = info.quantity or 1
       local value = vendor * q
       -- Conservative: profitable whether buyoutAmount is the stack total or a per-unit price.
+      -- In the live search, buyoutAmount is the price PER ITEM (the Full Scan reports stack totals).
+      -- Profit uses the per-item reading; the min() keeps it safe should a listing ever be a total.
       local profit = math.min(value - info.buyoutAmount, value - info.buyoutAmount * q)
       D("  #" .. i, "qty", q, "buyout", info.buyoutAmount, "vendor value", value, "profit", profit)
       if profit >= min then
         offers[#offers + 1] = { kind = "item", auctionID = info.auctionID, cost = info.buyoutAmount,
+                                unit = info.buyoutAmount, total = info.buyoutAmount * q,
                                 qty = q, value = value, profit = profit }
       end
     end
@@ -976,8 +979,8 @@ local function OnItemResults()
   -- Replace the scan's numbers on the row with the live ones.
   local qty, cost, profit, best = 0, 0, 0, math.huge
   for _, o in ipairs(offers) do
-    qty, cost, profit = qty + o.qty, cost + o.cost, profit + o.profit
-    best = math.min(best, o.cost / math.max(o.qty, 1))
+    qty, cost, profit = qty + o.qty, cost + (o.total or o.cost), profit + o.profit
+    best = math.min(best, o.unit or o.cost)          -- already per item: don't divide by the quantity
   end
   if #offers > 0 then
     r.qty, r.cost, r.profit, r.auctions, r.bestUnit, r.live = qty, cost, profit, #offers, best, true
@@ -1169,11 +1172,13 @@ end
 local function RecordPurchase(o, spent, item, late)
   -- quantity actually received: if the gold paid differs from the quote, scale the amount
   local qty = o.qty
-  local exact = math.abs(spent - o.cost) <= math.max(1, o.cost * 0.01)
-  if not exact and o.cost > 0 then qty = math.max(0, math.floor(o.qty * spent / o.cost + 0.5)) end
+  local function near(a, b) return math.abs(a - b) <= math.max(1, b * 0.01) end
+  local full = o.total or o.cost          -- what the whole listing costs
+  local exact = near(spent, o.cost) or near(spent, full)
+  if not exact and full > 0 then qty = math.max(0, math.floor(o.qty * spent / full + 0.5)) end
   local value = (o.value / math.max(o.qty, 1)) * qty
   Buy.spent, Buy.value, Buy.count, Buy.items = Buy.spent + spent, Buy.value + value, Buy.count + 1, Buy.items + qty
-  local note = exact and "" or (" (quoted " .. Money(o.cost) .. ")")
+  local note = exact and "" or (" (quoted " .. Money(full) .. ")")
   local prefix = late and "Late confirmation: " or ""
   if o.kind == "bid" then
     Print(string.format("%sBid placed on %dx %s: %s held%s (%s left). You win it if nobody outbids you.",
@@ -1286,7 +1291,7 @@ local function BuyClick()
       SafeCall(C_AuctionHouse.PlaceBid, o.auctionID, o.cost)
       SetState("buying", "Bidding...")
     elseif o.kind == "item" then
-      Print("Buying " .. o.qty .. "x " .. ItemName(Buy.item) .. " for " .. Money(o.cost) .. "...")
+      Print("Buying " .. o.qty .. "x " .. ItemName(Buy.item) .. " for " .. Money(o.total or o.cost) .. "...")
       D("PlaceBid auctionID", o.auctionID, "amount", o.cost)
       SafeCall(C_AuctionHouse.PlaceBid, o.auctionID, o.cost)
       SetState("buying", "Buying...")
@@ -2019,7 +2024,8 @@ function handlers.PLAYER_MONEY()
   if Buy.state == "buying" and Buy.inflight then
     local L, spent = Buy.limbo, before and (before - nowMoney) or 0
     -- a late charge for an earlier purchase arriving now: credit it to that one, not the current one
-    if L and spent > 0 and matches(spent, L.o.cost) and not matches(spent, Buy.inflight.cost) then
+    local function hit(o) return matches(spent, o.cost) or (o.total and matches(spent, o.total)) end
+    if L and spent > 0 and hit(L.o) and not hit(Buy.inflight) then
       Buy.limbo = nil
       RecordPurchase(L.o, spent, L.item, true)
       if Buy.money then Buy.money = Buy.money - spent end
@@ -2033,7 +2039,7 @@ function handlers.PLAYER_MONEY()
   local L = Buy.limbo
   if L and before and GetTime() - L.t < 60 then
     local spent = before - nowMoney
-    if spent > 0 and matches(spent, L.o.cost) then
+    if spent > 0 and (matches(spent, L.o.cost) or (L.o.total and matches(spent, L.o.total))) then
       Buy.limbo = nil
       RecordPurchase(L.o, spent, L.item, true)
     end
