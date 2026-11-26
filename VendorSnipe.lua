@@ -242,7 +242,14 @@ end
 ---------------------------------------------------------------------------
 local priceStats = {}   -- itemID -> { n, sx, sxx, sy, syy, cmin, cmax } with x = log(price), y = log(price / count)
 
-local function PriceMode() return VendorSnipeDB.priceMode end   -- "total", "unit" or nil (unknown)
+local function PriceMode() return VendorSnipeDB.priceMode end   -- overall: "total", "unit" or nil (unknown)
+
+-- Per item: different kinds of listings (pooled trade goods vs. ordinary stacks) may be reported
+-- differently, so each item's own reading wins whenever the scan data could determine it.
+local function ItemMode(itemID)
+  local m = VendorSnipeDB.itemPriceMode and VendorSnipeDB.itemPriceMode[itemID]
+  return m or PriceMode(), m and "this item" or (PriceMode() and "overall" or nil)
+end
 
 local function TrackPrice(itemID, count, buyout)
   if not buyout or buyout <= 0 or not count or count <= 0 then return end
@@ -257,11 +264,18 @@ end
 -- Decide from this scan; returns votes for logging.
 local function DetectPriceMode()
   local vTotal, vUnit = 0, 0
-  for _, st in pairs(priceStats) do
+  VendorSnipeDB.itemPriceMode = VendorSnipeDB.itemPriceMode or {}
+  for itemID, st in pairs(priceStats) do
     if st.n >= 3 and st.cmax >= st.cmin * 2 then
       local vx = st.sxx / st.n - (st.sx / st.n) ^ 2
       local vy = st.syy / st.n - (st.sy / st.n) ^ 2
-      if vy < vx * 0.5 then vTotal = vTotal + 1 elseif vx < vy * 0.5 then vUnit = vUnit + 1 end
+      if vy < vx * 0.5 then
+        vTotal = vTotal + 1
+        VendorSnipeDB.itemPriceMode[itemID] = "total"
+      elseif vx < vy * 0.5 then
+        vUnit = vUnit + 1
+        VendorSnipeDB.itemPriceMode[itemID] = "unit"
+      end
     end
   end
   wipe(priceStats)
@@ -274,8 +288,8 @@ local function DetectPriceMode()
 end
 
 -- Profit of buying `count` items for `price`, using the detected reading (or the safe minimum if unknown).
-local function ScanProfit(value, price, count)
-  local mode = PriceMode()
+local function ScanProfit(value, price, count, itemID)
+  local mode = ItemMode(itemID)
   if mode == "total" then return value - price end
   if mode == "unit" then return value - price * count end
   return math.min(value - price, value - price * count)
@@ -283,7 +297,7 @@ end
 
 -- Cheapest price per item shown in the list (before a live search replaces it with exact numbers).
 local function ScanUnitPrice(r)
-  if PriceMode() == "unit" then return r.minRaw or r.bestUnit end
+  if ItemMode(r.itemID) == "unit" then return r.minRaw or r.bestUnit end
   return r.minPerItem or r.bestUnit       -- "total" (and the most likely reading when still unknown)
 end
 
@@ -297,7 +311,7 @@ local function Consider(itemID, count, buyout, owner, info)
   -- The scan's price is either the whole stack's price or the per-item price. Use the reading detected
   -- from earlier scans; while unknown, only list auctions profitable under BOTH readings.
   local value = sellPrice * count
-  local profit = ScanProfit(value, buyout, count)
+  local profit = ScanProfit(value, buyout, count, itemID)
   if profit < MinProfit() then return end
 
   local r = byItem[itemID]
@@ -312,8 +326,10 @@ local function Consider(itemID, count, buyout, owner, info)
   r.cost = r.cost + buyout
   r.profit = r.profit + profit
   r.auctions = r.auctions + 1
-  r.minRaw = math.min(r.minRaw or math.huge, buyout)                    -- if the price is per item
-  r.minPerItem = math.min(r.minPerItem or math.huge, buyout / count)    -- if the price is per stack
+  if buyout < (r.minRaw or math.huge) then r.minRaw, r.minRawCount = buyout, count end           -- if per item
+  if buyout / count < (r.minPerItem or math.huge) then                                           -- if per stack
+    r.minPerItem, r.cheapStackPrice, r.cheapStackCount = buyout / count, buyout, count
+  end
   r.bestUnit = ScanUnitPrice(r)
 end
 
@@ -335,7 +351,7 @@ local function ConsiderBid(itemID, count, buyout, owner, minBid, minInc, bidAmou
   if buyout and buyout > 0 and nextBid >= buyout then return end   -- just buy it out instead
   local sellPrice = info[1]
   local value = sellPrice * count
-  local profit = ScanProfit(value, nextBid, count)   -- same reading as buyouts
+  local profit = ScanProfit(value, nextBid, count, itemID)   -- same reading as buyouts
   if profit < MinProfit() then return end
   local key = BidKey(itemID, count, nextBid, buyout)
   bidResults[#bidResults + 1] = {
@@ -373,7 +389,7 @@ local function Evaluate(i, info)
   if not itemID then return end
   TrackPrice(itemID, count, buyout)
   if info and buyout and buyout > 0 and count > 0 then
-    local unit = (PriceMode() == "unit") and buyout or (buyout / count)
+    local unit = (ItemMode(itemID) == "unit") and buyout or (buyout / count)
     local c = cheapest[itemID]
     if not c or unit < c.unit then cheapest[itemID] = { unit = unit, info = info } end
   end
@@ -984,6 +1000,7 @@ local function OnItemResults()
   end
   if #offers > 0 then
     r.qty, r.cost, r.profit, r.auctions, r.bestUnit, r.live = qty, cost, profit, #offers, best, true
+    r.bestSource = "live listing price (per item)"
     if ui then ui:Refresh() end
   end
   Print(string.format("%s: %d listings, %d profitable right now (%d items, profit %s).",
@@ -1023,7 +1040,7 @@ local function OnCommodityResults()
     -- Replace the scan's numbers on the row with the live ones.
     local first = SafeCall(C_AuctionHouse.GetCommoditySearchResultInfo, r.itemID, 1)
     r.qty, r.cost, r.profit, r.live = qty, cost, value - cost, true
-    if first and first.unitPrice then r.bestUnit = first.unitPrice end
+    if first and first.unitPrice then r.bestUnit, r.bestSource = first.unitPrice, "live trade-goods price (per item)" end
     if ui then ui:Refresh() end
     Print(string.format("%s: %d can be bought below vendor price right now (%s total, profit %s).",
       ItemName(r), qty, Money(cost), Money(value - cost)))
@@ -1813,6 +1830,19 @@ local function BuildUI()
       else
         GameTooltip:AddLine(string.format("%d auctions, %d items, total cost %s",
           d.auctions, d.qty, Money(d.cost)), 1, 1, 1)
+        if d.live and d.bestSource then
+          GameTooltip:AddLine("Cheapest/ea " .. Money(d.bestUnit) .. ": " .. d.bestSource .. ".", 0.8, 0.8, 1, true)
+        else
+          local mode, from = ItemMode(d.itemID)
+          if mode == "unit" and d.minRaw then
+            GameTooltip:AddLine(string.format("Cheapest/ea %s: Full Scan listing of %d priced %s per item (reading detected for %s).",
+              Money(d.minRaw), d.minRawCount or 0, Money(d.minRaw), from or "?"), 0.8, 0.8, 1, true)
+          elseif d.cheapStackPrice then
+            GameTooltip:AddLine(string.format("Cheapest/ea %s: Full Scan listing of %d for %s in total, divided by %d (%s).",
+              Money(d.minPerItem), d.cheapStackCount or 0, Money(d.cheapStackPrice), d.cheapStackCount or 0,
+              from and ("reading detected for " .. from) or "reading not detected yet, assumed per stack"), 0.8, 0.8, 1, true)
+          end
+        end
         GameTooltip:AddLine(d.live and "Numbers updated from the live search (exact)." or
           ("Numbers from the Full Scan" .. (PriceMode() and "" or " (price reading not detected yet, Cheapest/ea assumes stack prices)")
            .. "; the live search before buying uses exact current prices."), 0.7, 0.7, 0.7, true)
@@ -1926,7 +1956,7 @@ function handlers.ADDON_LOADED(arg1)
   if type(VendorSnipeDB.results) == "table" then
     results = VendorSnipeDB.results
     for _, r in ipairs(results) do
-      r.selected, r.done, r.live = false, false, nil
+      r.selected, r.done, r.live, r.bestSource = false, false, nil, nil
       if r.minPerItem or r.minRaw then r.bestUnit = ScanUnitPrice(r) end
       byItem[r.itemID] = r
     end
