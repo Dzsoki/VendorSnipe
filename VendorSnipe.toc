@@ -2,7 +2,7 @@
 ## Title: VendorSnipe
 ## Notes: Scans the Auction House for auctions whose buyout is below the vendor sell price.
 ## Author: VendorSnipe
-## Version: 2.13.3
+## Version: 2.13.4
 ## SavedVariables: VendorSnipeDB
 
 VendorSnipe_Guide.lua

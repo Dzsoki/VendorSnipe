@@ -870,7 +870,15 @@ local function ShowOffer()
   if o.kind == "bid" then
     SetState("ready", string.format("Bid %s on %dx %s (%s)", ShortMoney(o.cost), o.qty, ItemName(Buy.item), TIME_LABELS[o.timeLeft] or "?"))
   else
-    SetState("ready", string.format("Buy %dx %s - %s", o.qty, ItemName(Buy.item), ShortMoney(o.total or o.cost)))
+    local total = o.total or o.cost
+    local each
+    if o.kind == "item" then
+      each = (o.unit or (total / math.max(o.qty, 1)))             -- one listing: its price per item
+      each = ShortMoney(each) .. " each"
+    else
+      each = "avg " .. ShortMoney(total / math.max(o.qty, 1))     -- several listings at different prices
+    end
+    SetState("ready", string.format("Buy %dx %s - %s (%s)", o.qty, ItemName(Buy.item), ShortMoney(total), each))
   end
 end
 
@@ -1748,7 +1756,7 @@ local function BuildUI()
   f.status:SetText("Open the Auction House and press Full Scan.")
 
   local buy = CreateFrame("Button", "VendorSnipeBuyButton", f, "UIPanelButtonTemplate")
-  buy:SetSize(360, 26)
+  buy:SetSize(440, 26)
   buy:SetPoint("BOTTOMRIGHT", -14, 10)
   buy:SetText("Buy Selected")
   buy:SetScript("OnClick", function()
@@ -1764,7 +1772,7 @@ local function BuildUI()
   end)
   f.buy = buy
   local bfs = buy:GetFontString()
-  if bfs then bfs:SetWidth(344) bfs:SetWordWrap(false) end   -- long labels end in "..." instead of overflowing
+  if bfs then bfs:SetWidth(424) bfs:SetWordWrap(false) end   -- long labels end in "..." instead of overflowing
 
 
   local stop = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
@@ -2104,7 +2112,8 @@ function handlers.COMMODITY_PRICE_UPDATED(unitPrice, totalPrice)
   local o = Buy.offers[1]
   if totalPrice and totalPrice + MinProfit() <= o.value and totalPrice <= GetMoney() then
     o.cost = totalPrice
-    SetState("confirm", string.format("Confirm %dx %s - %s", o.qty, ItemName(Buy.item), ShortMoney(totalPrice)))
+    SetState("confirm", string.format("Confirm %dx %s - %s (avg %s)", o.qty, ItemName(Buy.item), ShortMoney(totalPrice),
+      ShortMoney((unitPrice and unitPrice > 0) and unitPrice or (totalPrice / math.max(o.qty, 1)))))
   else
     C_AuctionHouse.CancelCommoditiesPurchase()
     OnFailed("price changed to " .. Money(totalPrice or 0) .. ", no longer profitable")
