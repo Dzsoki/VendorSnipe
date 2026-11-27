@@ -677,6 +677,9 @@ local function Summary()
   elseif Buy.sessionMoney then
     Print("Nothing was bought in this run.")
   end
+  if (Buy.accidentalBids or 0) > 0 then
+    Print(string.format("%d listings were taken as bids instead of buyouts - see the AH Bids tab. They are not counted above.", Buy.accidentalBids))
+  end
   if balance and balance ~= Buy.spent then
     Print(string.format("Note: your gold changed by %s%s during this run in total (other gold changes, e.g. mail or repairs, are included there).",
       balance > 0 and "-" or "+", Money(math.abs(balance))))
@@ -692,6 +695,7 @@ ResetBuy = function(silent)
   Buy.offers, Buy.item, Buy.key = nil, nil, nil
   Buy.spent, Buy.value, Buy.count, Buy.items = 0, 0, 0, 0
   Buy.sessionMoney, Buy.inflight, Buy.money, Buy.confirmWait = nil, nil, nil, nil
+  Buy.accidentalBids = 0
   Buy.checking = false
   if Buy.watching and StopWatch then StopWatch("stopped") end
   SetState("idle", IdleLabel())
@@ -1211,7 +1215,14 @@ function RecordPurchase(o, spent, item, late)
   local qty = o.qty
   local function near(a, b) return math.abs(a - b) <= math.max(1, b * 0.01) end
   local full = o.total or o.cost          -- what the whole listing costs
-  local exact = near(spent, o.cost) or near(spent, full)
+  if o.kind == "item" and o.qty > 1 and near(spent, o.cost) and not near(spent, full) then
+    -- only the per-item price left the bags: the server took it as a BID on the stack, not a buyout
+    Buy.accidentalBids = (Buy.accidentalBids or 0) + 1
+    Print(string.format("|cffffd100Not bought:|r %s x%d was taken as a BID of %s (not a buyout). Check the AH Bids tab: you win it if nobody outbids you, otherwise the gold comes back by mail.",
+      ItemName(item), o.qty, Money(spent)))
+    return
+  end
+  local exact = near(spent, full) or (o.qty == 1 and near(spent, o.cost))
   local note, extra = "", 0
   if not exact and full > 0 then
     if spent > full then
@@ -1345,9 +1356,12 @@ local function BuyClick()
       SafeCall(C_AuctionHouse.PlaceBid, o.auctionID, o.cost)
       SetState("buying", "Bidding...")
     elseif o.kind == "item" then
-      Print("Buying " .. o.qty .. "x " .. ItemName(Buy.item) .. " for " .. Money(o.total or o.cost) .. "...")
-      D("PlaceBid auctionID", o.auctionID, "amount", o.cost)
-      SafeCall(C_AuctionHouse.PlaceBid, o.auctionID, o.cost)
+      -- The live search gives the price PER ITEM. Buying out needs the price of the WHOLE listing;
+      -- sending the per-item price for a stack would only place a (low) bid on it.
+      local amount = o.total or o.cost
+      Print("Buying " .. o.qty .. "x " .. ItemName(Buy.item) .. " for " .. Money(amount) .. "...")
+      D("PlaceBid (buyout) auctionID", o.auctionID, "amount", amount, "per item", o.cost, "qty", o.qty)
+      SafeCall(C_AuctionHouse.PlaceBid, o.auctionID, amount)
       SetState("buying", "Buying...")
     else
       Print("Requesting final price for " .. o.qty .. "x " .. ItemName(Buy.item) .. "...")
