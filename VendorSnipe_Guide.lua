@@ -16,7 +16,7 @@ ns.GuideText = table.concat({
   "- The list " .. K .. "fills in while the scan runs" .. E .. ", best deals on top. You can start buying as soon as the status says " .. K .. "Checking vendor prices" .. E .. " - no need to wait for the end. Big deals go fast, so buy the top ones first.",
   "- The server allows a full scan only about " .. K .. "once every 15 minutes" .. E .. ". The addon tells you how long to wait.",
   "- Your own auctions, bid-only auctions and items vendors won't buy are skipped.",
-  "- The scan doesn't say whether a listing's price is for the whole stack or per item. VendorSnipe works this out from the scan data itself (same item in different stack sizes) and remembers it. Until it knows, it only lists deals that are profitable either way. The Cheapest column shows the item's lowest buyout exactly as listed (from the Full Scan, then updated by live searches).",
+  "- The scan doesn't say whether a listing's price is for the whole stack or per item. VendorSnipe works this out from the scan data itself (same item in different stack sizes) and remembers it. Until it knows, it only lists deals that are profitable either way. The Cheapest column shows the live cheapest price per item once the item has been searched (Watch, buying) - the same data the Buy button uses. Until then it shows the Full Scan value in grey.",
   "",
   H .. "Closing the AH during a scan" .. E,
   "- Keep the Auction House open for the few seconds until the status says " .. K .. "Copying auction data" .. E .. ". The server only sends scan data while the AH is open.",

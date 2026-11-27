@@ -1838,10 +1838,10 @@ local function BuildUI()
         GameTooltip:AddLine(string.format("%d auctions, %d items, total cost %s",
           d.auctions, d.qty, Money(d.cost)), 1, 1, 1)
         if d.bestUnit and d.bestUnit < math.huge then
-          GameTooltip:AddLine("Cheapest buyout at the Full Scan: " .. Money(d.bestUnit), 0.8, 0.8, 1)
+          GameTooltip:AddLine("Cheapest buyout at the Full Scan: " .. Money(d.bestUnit) .. (d.liveCheapest and "" or "  (shown in grey until a live search)"), 0.8, 0.8, 1)
         end
         if d.liveCheapest then
-          GameTooltip:AddLine("Cheapest right now (live search, price per item): " .. Money(d.liveCheapest), 0.8, 0.8, 1)
+          GameTooltip:AddLine("Cheapest right now (live search, price per item - shown in the column): " .. Money(d.liveCheapest), 0.8, 0.8, 1)
         end
         GameTooltip:AddLine(d.live and "Numbers updated from the live search." or
           "Numbers from the Full Scan; the live search before buying uses the current prices.", 0.7, 0.7, 0.7, true)
@@ -1912,7 +1912,15 @@ local function BuildUI()
         row.vendor:SetText(r.buyout and r.buyout > 0 and Money(r.buyout) or "|cffffd100bid only|r")
         row.time:SetText(TIME_LABELS[r.timeLeft] or "?")
       else
-        row.unit:SetText(Money(r.bestUnit))
+        -- Cheapest: the live per-item price (same data the Buy button uses) once the item was searched;
+        -- until then the Full Scan value, in grey.
+        if r.liveCheapest then
+          row.unit:SetText(Money(r.liveCheapest))
+        elseif r.bestUnit and r.bestUnit < math.huge then
+          row.unit:SetText("|cff9d9d9d" .. Money(r.bestUnit) .. "|r")
+        else
+          row.unit:SetText("")
+        end
         row.vendor:SetText(Money(r.vendor))
       end
       row.profit:SetText(r.done and (r.soldOut and "|cff808080none left|r" or "|cff808080done|r")

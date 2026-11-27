@@ -29,7 +29,7 @@ To update, download the new zip and replace the old `VendorSnipe` folder in your
 - The list **fills in while the scan runs**, best deals on top. You can start buying as soon as the status says **Checking vendor prices**, so there's no need to wait for the end. Big deals go fast, so buy the top ones first.
 - The server allows a full scan only about **once every 15 minutes**. The addon tells you how long to wait.
 - Your own auctions, bid-only auctions and items vendors won't buy are skipped.
-- The scan doesn't say whether a listing's price is for the whole stack or per item. VendorSnipe works this out from the scan data itself (same item in different stack sizes) and remembers it. Until it knows, it only lists deals that are profitable either way. The **Cheapest** column shows the item's lowest buyout exactly as listed (from the Full Scan, then updated by live searches).
+- The scan doesn't say whether a listing's price is for the whole stack or per item. VendorSnipe works this out from the scan data itself (same item in different stack sizes) and remembers it. Until it knows, it only lists deals that are profitable either way. The **Cheapest** column shows the live cheapest price per item once the item has been searched (Watch, buying), the same data the Buy button uses. Until then it shows the Full Scan value in grey.
 
 ### Closing the AH during a scan
 
