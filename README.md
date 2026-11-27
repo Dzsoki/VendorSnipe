@@ -93,6 +93,7 @@ WoW only allows a purchase from a real mouse click or key press, so no addon can
 - For one sale from specific bags, type e.g. `/vs sell 0 2` (0 = Backpack, 1–4 = bags, 5 = Reagent bag).
 - **Keep list:** type `/vs keep` and shift-click an item to protect it (do it again to remove it). `/vs keep` alone shows the list.
 - Only the last 12 sold items can be bought back from the vendor, so check the list before confirming.
+- Selling is fast: items go to the vendor in bursts of 8, five bursts a second. When all bags are ticked and none of your grey items are protected, all grey junk is sold in one request with the game's own sell-junk function.
 - Items that didn't sell (vendor busy) are retried automatically. At the end you see how many stacks really sold, the gold you actually received, and which items are still in your bags.
 - Some items need a confirmation from the game before they can be sold: items bought from a vendor that you can still refund, and loot you can still trade to your group. Answer the popup, then click **Sell All** again for the rest.
 

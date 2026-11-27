@@ -3,8 +3,10 @@
 -- quest items, locked items, items in an equipment set, and items on the keep list (/vs keep).
 local ADDON, ns = ...
 
-local SELL_INTERVAL = 0.3   -- seconds between sales, so the server keeps up
-local MAX_PASSES = 3        -- items that didn't sell are retried up to this many passes
+local SELL_INTERVAL = 0.2   -- seconds between bursts
+local SELL_BURST = 8        -- sales sent per burst; whatever the server drops is retried
+local MAX_PASSES = 5        -- items that didn't sell are retried up to this many passes
+local RETRY_PAUSE = 0.8     -- seconds to let the server catch up before a retry pass
 local QUEST_CLASS = (Enum and Enum.ItemClass and Enum.ItemClass.Questitem) or 12
 
 local function Print(msg) ns.Print(msg) end
@@ -25,6 +27,15 @@ local function SlotInfo(bag, slot)
   end
   local _, count, locked, _, _, _, link, _, noValue, itemID = GetContainerItemInfo(bag, slot)
   return itemID, count or 1, link, locked, noValue
+end
+
+local function SlotQuality(bag, slot)
+  if C_Container and C_Container.GetContainerItemInfo then
+    local info = C_Container.GetContainerItemInfo(bag, slot)
+    return info and info.quality
+  end
+  local _, _, _, quality = GetContainerItemInfo(bag, slot)
+  return quality
 end
 
 local function InEquipmentSet(bag, slot)
@@ -174,11 +185,21 @@ local function SellNext()
     StopSelling("Vendor window closed, stopped.")
     return
   end
-  local e = table.remove(queue, 1)
-  if not e then
+  -- send a burst of sales; anything the server drops is picked up by the retry pass
+  local sent = 0
+  while sent < SELL_BURST and #queue > 0 do
+    local e = table.remove(queue, 1)
+    -- Make sure the slot still holds the same item (bags may have changed since the list was made).
+    local itemID, _, _, locked = SlotInfo(e.bag, e.slot)
+    if itemID == e.itemID and not locked then
+      UseItem(e.bag, e.slot)
+      sent = sent + 1
+    end
+  end
+  if #queue == 0 then
     -- pass finished: after a short pause, retry what's still in its slot
     if ticker then ticker:Cancel() ticker = nil end
-    C_Timer.After(1, function()
+    C_Timer.After(RETRY_PAUSE, function()
       if not selling then return end
       local again = {}
       for _, x in ipairs(all) do
@@ -190,28 +211,53 @@ local function SellNext()
       for i, x in ipairs(again) do queue[i] = x end
       ticker = C_Timer.NewTicker(SELL_INTERVAL, SellNext)
     end)
-    return
-  end
-  -- Make sure the slot still holds the same item (bags may have changed since the list was made).
-  local itemID, _, _, locked = SlotInfo(e.bag, e.slot)
-  if itemID == e.itemID and not locked then
-    UseItem(e.bag, e.slot)
   end
 end
 
-local function StartSelling(list)
+-- Grey junk can go in ONE request with the game's own "sell all junk" - but only when that can't
+-- sell anything you protected: all bags ticked, and every grey item with a price is on our list.
+local function JunkFastPathSafe(only)
+  local sellJunk = C_MerchantFrame and C_MerchantFrame.SellAllJunkItems
+  if not sellJunk or only then return false end
+  for bag = 0, LastBag() do
+    if (GetNumSlots(bag) or 0) > 0 and not BagEnabled(bag) then return false end
+    for slot = 1, (GetNumSlots(bag) or 0) do
+      if SlotQuality(bag, slot) == 0 then
+        local verdict = Classify(bag, slot)
+        if verdict ~= "sell" and verdict ~= "empty" and verdict:sub(1, 13) ~= "no sell price" then
+          return false     -- a protected grey (keep list, quest, equipment set, locked): don't use it
+        end
+      end
+    end
+  end
+  return true
+end
+
+local function StartSelling(data)
   if selling then return end
+  local list, only = data.list, data.only
   wipe(queue); wipe(all)
-  for i, e in ipairs(list) do queue[i] = e all[i] = e end
   selling, pass, startMoney = true, 1, GetMoney()
-  ticker = C_Timer.NewTicker(SELL_INTERVAL, SellNext)
+  local junkSent = false
+  if JunkFastPathSafe(only) then
+    local ok = pcall(C_MerchantFrame.SellAllJunkItems)
+    junkSent = ok
+    ns.Debug("sell: grey junk sent in one request:", tostring(ok))
+  end
+  for _, e in ipairs(list) do
+    all[#all + 1] = e
+    -- greys were just sold in one go; anything left over is caught by the retry pass
+    if not (junkSent and SlotQuality(e.bag, e.slot) == 0) then queue[#queue + 1] = e end
+  end
+  SellNext()   -- first burst right away
+  if selling and #queue > 0 then ticker = C_Timer.NewTicker(SELL_INTERVAL, SellNext) end
 end
 
 StaticPopupDialogs["VENDORSNIPE_SELLALL"] = {
   text = "%s",
   button1 = YES or "Yes",
   button2 = NO or "No",
-  OnAccept = function(self, data) StartSelling(data) end,
+  OnAccept = function(self, data) StartSelling(data) end,   -- data = { list = ..., only = ... }
   timeout = 0,
   whileDead = false,
   hideOnEscape = true,
@@ -252,7 +298,7 @@ function ns.SellAll(args)
   if skipText then Print(skipText) end
   local text = string.format("Sell %d item stacks for %s?\n\nFrom: %s\n\nThe list is in chat. Only the last 12 sold items can be bought back.\nProtect items with /vs keep [item link].",
     #list, Money(total), bags)
-  StaticPopup_Show("VENDORSNIPE_SELLALL", text, nil, list)
+  StaticPopup_Show("VENDORSNIPE_SELLALL", text, nil, { list = list, only = only })
 end
 
 ---------------------------------------------------------------------------
