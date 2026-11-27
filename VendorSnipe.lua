@@ -326,6 +326,10 @@ local function Consider(itemID, count, buyout, owner, info)
   r.cost = r.cost + buyout
   r.profit = r.profit + profit
   r.auctions = r.auctions + 1
+  r.samples = r.samples or {}
+  r.samples[#r.samples + 1] = { buyout, count }
+  table.sort(r.samples, function(a, b) return a[1] < b[1] end)
+  if #r.samples > 5 then r.samples[6] = nil end
   if buyout < (r.minRaw or math.huge) then r.minRaw, r.minRawCount = buyout, count end           -- if per item
   if buyout / count < (r.minPerItem or math.huge) then                                           -- if per stack
     r.minPerItem, r.cheapStackPrice, r.cheapStackCount = buyout / count, buyout, count
@@ -2175,6 +2179,46 @@ SlashCmdList.VENDORSNIPE = function(msg)
       Print(VendorSnipeDB.chatMode == "both" and "Messages now go to the VendorSnipe tab AND the main chat window."
         or "Messages now go only to the VendorSnipe chat tab.")
     end
+  elseif cmd == "price" then
+    local id = tonumber(rest) or tonumber((rest or ""):match("item:(%d+)"))
+    if not id then Print("Usage: /vs price [shift-click the item]") return end
+    local name = (C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(id)) or ("item:" .. id)
+    Print("--- raw prices for " .. name .. " (please send these lines) ---")
+    local r = byItem[id]
+    if r and r.samples then
+      for i, x in ipairs(r.samples) do
+        Print(string.format("Full Scan listing %d: buyout field %s, count %d", i, Money(x[1]), x[2]))
+      end
+    else
+      Print("Full Scan: not in the current deal list (only deals keep their scan listings).")
+    end
+    if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then Print("Open the Auction House to also see the live numbers.") return end
+    local ilvl = select(4, GetItemInfoFn(id))
+    local keys = BuildKeys({ itemID = id, ilvl = ilvl })
+    local function dump(key, tryNext)
+      SafeCall(C_AuctionHouse.SendSearchQuery, key, SORT_BY_PRICE, true)
+      C_Timer.After(2.5, function()
+        local nc = SafeCall(C_AuctionHouse.GetNumCommoditySearchResults, id) or 0
+        local ni = SafeCall(C_AuctionHouse.GetNumItemSearchResults, key) or 0
+        if nc > 0 then
+          for i = 1, math.min(5, nc) do
+            local x = SafeCall(C_AuctionHouse.GetCommoditySearchResultInfo, id, i)
+            if x then Print(string.format("Live (trade goods) %d: unitPrice %s, quantity %d", i, Money(x.unitPrice), x.quantity or 0)) end
+          end
+        elseif ni > 0 then
+          for i = 1, math.min(5, ni) do
+            local x = SafeCall(C_AuctionHouse.GetItemSearchResultInfo, key, i)
+            if x then Print(string.format("Live (listing) %d: buyoutAmount %s, quantity %d, bid %s",
+              i, Money(x.buyoutAmount or 0), x.quantity or 0, Money(x.bidAmount or x.minBid or 0))) end
+          end
+        elseif tryNext then
+          dump(tryNext)
+        else
+          Print("Live: no listings found.")
+        end
+      end)
+    end
+    dump(keys[1], keys[2])
   elseif cmd == "watch" then
     ToggleWatch()
   elseif cmd == "auto" then

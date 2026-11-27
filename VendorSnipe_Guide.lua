@@ -110,6 +110,7 @@ ns.GuideText = table.concat({
   K .. "/vs keep [item]" .. E .. "  add/remove an item on the never-sell list; /vs keep alone shows it",
   K .. "/vs reset" .. E .. "  reset the addon's scan cooldown timer (the server may still refuse)",
   K .. "/vs guide" .. E .. "  open this guide",
+  K .. "/vs price [item]" .. E .. "  show the raw prices the game reports for an item (Full Scan and live), for troubleshooting",
   K .. "/vs debug" .. E .. "  toggle a step-by-step debug log in chat",
   K .. "/vs diag" .. E .. "  print diagnostics (addon version, AH functions available, buy state)",
   "",

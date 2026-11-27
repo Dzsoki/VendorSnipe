@@ -137,6 +137,7 @@ WoW only allows a purchase from a real mouse click or key press, so no addon can
 | `/vs keep [item]` | Add/remove an item on the never-sell list; `/vs keep` alone shows it |
 | `/vs reset` | Reset the addon's scan cooldown timer (the server may still refuse) |
 | `/vs guide` | Open the in-game guide |
+| `/vs price [item]` | Show the raw prices the game reports for an item (Full Scan and live), for troubleshooting |
 | `/vs debug` | Toggle a step-by-step debug log in chat |
 | `/vs diag` | Print diagnostics (addon version, AH functions available, buy state) |
 
