@@ -391,7 +391,7 @@ local function Evaluate(i, info)
   if info and buyout and buyout > 0 and count > 0 then
     local unit = (ItemMode(itemID) == "unit") and buyout or (buyout / count)
     local c = cheapest[itemID]
-    if not c or unit < c.unit then cheapest[itemID] = { unit = unit, info = info } end
+    if not c or unit < c.unit then cheapest[itemID] = { unit = unit, raw = buyout, info = info } end
   end
   if buyout and buyout > 0 then Consider(itemID, count, buyout, owner, info) end
   ConsiderBid(itemID, count, buyout, owner, snapMinBid[i], snapInc[i], snapBid[i], snapHigh[i], snapTime[i], info)
@@ -433,7 +433,7 @@ local function Finish()
     if not byItem[itemID] and vendor and vendor > 0 and c.unit > vendor and c.unit <= vendor * WATCH_MARGIN then
       near[#near + 1] = { itemID = itemID, name = c.info[2], link = c.info[3], quality = c.info[4], icon = c.info[5],
                           ilvl = c.info[6], stack = c.info[7], vendor = vendor, ratio = c.unit / vendor,
-                          qty = 0, cost = 0, profit = 0, auctions = 0, bestUnit = c.unit, nearMiss = true }
+                          qty = 0, cost = 0, profit = 0, auctions = 0, bestUnit = c.raw, minRaw = c.raw, nearMiss = true }
     end
   end
   table.sort(near, function(a, b) return a.ratio < b.ratio end)
@@ -443,7 +443,7 @@ local function Finish()
   local before = PriceMode()
   local mode, vT, vU = DetectPriceMode()
   D("price reading votes: per stack", vT, "per item", vU, "->", tostring(mode))
-  for _, r in ipairs(results) do if not r.live and r.minRaw then r.bestUnit = r.minRaw end end
+  for _, r in ipairs(results) do if r.minRaw then r.bestUnit = r.minRaw end end
   if mode and mode ~= before then
     Print("Detected from the scan data: auction prices are " .. (mode == "total" and "for the whole stack" or "per item")
       .. ". Profits use that from now on" .. (before == nil and "; the next Full Scan will also find deals the safe check had to leave out." or "."))
@@ -999,7 +999,9 @@ local function OnItemResults()
   for _, o in ipairs(offers) do
     qty, cost, profit = qty + o.qty, cost + (o.total or o.cost), profit + o.profit
   end
-  if cheapestLive then r.bestUnit = cheapestLive end   -- "Cheapest": lowest live buyout, exactly as listed
+  -- The live search reports prices PER ITEM, the Full Scan per listing: never mix them in the Cheapest
+  -- column (that made it jump). The column keeps the Full Scan value; the live price goes to the tooltip.
+  if cheapestLive then r.liveCheapest = cheapestLive end
   if #offers > 0 then
     r.qty, r.cost, r.profit, r.auctions, r.live = qty, cost, profit, #offers, true
   end
@@ -1041,7 +1043,7 @@ local function OnCommodityResults()
     -- Replace the scan's numbers on the row with the live ones.
     local first = SafeCall(C_AuctionHouse.GetCommoditySearchResultInfo, r.itemID, 1)
     r.qty, r.cost, r.profit, r.live = qty, cost, value - cost, true
-    if first and first.unitPrice then r.bestUnit = first.unitPrice end   -- lowest live price, as the AH shows it
+    if first and first.unitPrice then r.liveCheapest = first.unitPrice end   -- tooltip only, see above
     if ui then ui:Refresh() end
     Print(string.format("%s: %d can be bought below vendor price right now (%s total, profit %s).",
       ItemName(r), qty, Money(cost), Money(value - cost)))
@@ -1832,7 +1834,10 @@ local function BuildUI()
         GameTooltip:AddLine(string.format("%d auctions, %d items, total cost %s",
           d.auctions, d.qty, Money(d.cost)), 1, 1, 1)
         if d.bestUnit and d.bestUnit < math.huge then
-          GameTooltip:AddLine("Cheapest buyout: " .. Money(d.bestUnit) .. (d.live and " (live)" or " (Full Scan)"), 0.8, 0.8, 1)
+          GameTooltip:AddLine("Cheapest buyout at the Full Scan: " .. Money(d.bestUnit), 0.8, 0.8, 1)
+        end
+        if d.liveCheapest then
+          GameTooltip:AddLine("Cheapest right now (live search, price per item): " .. Money(d.liveCheapest), 0.8, 0.8, 1)
         end
         GameTooltip:AddLine(d.live and "Numbers updated from the live search." or
           "Numbers from the Full Scan; the live search before buying uses the current prices.", 0.7, 0.7, 0.7, true)
@@ -1946,7 +1951,7 @@ function handlers.ADDON_LOADED(arg1)
   if type(VendorSnipeDB.results) == "table" then
     results = VendorSnipeDB.results
     for _, r in ipairs(results) do
-      r.selected, r.done, r.live = false, false, nil
+      r.selected, r.done, r.live, r.liveCheapest = false, false, nil, nil
       if r.minRaw then r.bestUnit = r.minRaw end
       byItem[r.itemID] = r
     end
