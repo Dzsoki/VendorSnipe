@@ -25,11 +25,11 @@ To update, download the new zip and replace the old `VendorSnipe` folder in your
 
 - Open the Auction House. The VendorSnipe window appears next to it.
 - Press **Full Scan**. It downloads every listing at once, so it can take a few seconds.
-- Results are grouped per item and sorted by total profit: quantity, cheapest price each, vendor price each and profit.
+- Results are grouped per item and sorted by total profit: quantity, cheapest buyout, vendor price each and profit.
 - The list **fills in while the scan runs**, best deals on top. You can start buying as soon as the status says **Checking vendor prices**, so there's no need to wait for the end. Big deals go fast, so buy the top ones first.
 - The server allows a full scan only about **once every 15 minutes**. The addon tells you how long to wait.
 - Your own auctions, bid-only auctions and items vendors won't buy are skipped.
-- The scan doesn't say whether a listing's price is for the whole stack or per item. VendorSnipe works this out from the scan data itself (same item in different stack sizes) and remembers it. Until it knows, it only lists deals that are profitable either way. **Cheapest/ea** always shows the price per item; after a live search it shows the exact live price.
+- The scan doesn't say whether a listing's price is for the whole stack or per item. VendorSnipe works this out from the scan data itself (same item in different stack sizes) and remembers it. Until it knows, it only lists deals that are profitable either way. The **Cheapest** column shows the item's lowest buyout exactly as listed (from the Full Scan, then updated by live searches).
 
 ### Closing the AH during a scan
 

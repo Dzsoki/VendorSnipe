@@ -330,7 +330,7 @@ local function Consider(itemID, count, buyout, owner, info)
   if buyout / count < (r.minPerItem or math.huge) then                                           -- if per stack
     r.minPerItem, r.cheapStackPrice, r.cheapStackCount = buyout / count, buyout, count
   end
-  r.bestUnit = ScanUnitPrice(r)
+  r.bestUnit = r.minRaw            -- "Cheapest" column: the item's lowest buyout, exactly as listed
 end
 
 local prevBidKeys = {}            -- bid deals of the previous scan, to spot unchanged ones
@@ -443,10 +443,10 @@ local function Finish()
   local before = PriceMode()
   local mode, vT, vU = DetectPriceMode()
   D("price reading votes: per stack", vT, "per item", vU, "->", tostring(mode))
-  for _, r in ipairs(results) do if not r.live then r.bestUnit = ScanUnitPrice(r) end end
+  for _, r in ipairs(results) do if not r.live and r.minRaw then r.bestUnit = r.minRaw end end
   if mode and mode ~= before then
     Print("Detected from the scan data: auction prices are " .. (mode == "total" and "for the whole stack" or "per item")
-      .. ". Cheapest/ea and profits use that from now on" .. (before == nil and "; the next Full Scan will also find deals the safe check had to leave out." or "."))
+      .. ". Profits use that from now on" .. (before == nil and "; the next Full Scan will also find deals the safe check had to leave out." or "."))
   end
   SortResults()
   VendorSnipeDB.results, VendorSnipeDB.bidResults, VendorSnipeDB.resultsTime = results, bidResults, time()
@@ -972,9 +972,11 @@ local function OnItemResults()
     ShowOffer()
     return
   end
+  local cheapestLive
   for i = 1, n do
     local info = SafeCall(C_AuctionHouse.GetItemSearchResultInfo, Buy.key, i)
     if info and info.buyoutAmount and info.buyoutAmount > 0 and not info.containsOwnerItem then
+      if not cheapestLive or info.buyoutAmount < cheapestLive then cheapestLive = info.buyoutAmount end
       local vendor = (info.itemLink and GetSellPrice(info.itemLink)) or r.vendor or 0
       local q = info.quantity or 1
       local value = vendor * q
@@ -993,16 +995,15 @@ local function OnItemResults()
   table.sort(offers, function(a, b) return a.profit > b.profit end)
   Buy.offers = offers
   -- Replace the scan's numbers on the row with the live ones.
-  local qty, cost, profit, best = 0, 0, 0, math.huge
+  local qty, cost, profit = 0, 0, 0
   for _, o in ipairs(offers) do
     qty, cost, profit = qty + o.qty, cost + (o.total or o.cost), profit + o.profit
-    best = math.min(best, o.unit or o.cost)          -- already per item: don't divide by the quantity
   end
+  if cheapestLive then r.bestUnit = cheapestLive end   -- "Cheapest": lowest live buyout, exactly as listed
   if #offers > 0 then
-    r.qty, r.cost, r.profit, r.auctions, r.bestUnit, r.live = qty, cost, profit, #offers, best, true
-    r.bestSource = "live listing price (per item)"
-    if ui then ui:Refresh() end
+    r.qty, r.cost, r.profit, r.auctions, r.live = qty, cost, profit, #offers, true
   end
+  if ui then ui:Refresh() end
   Print(string.format("%s: %d listings, %d profitable right now (%d items, profit %s).",
     ItemName(r), n, #offers, qty, Money(profit)))
   ShowOffer()
@@ -1040,7 +1041,7 @@ local function OnCommodityResults()
     -- Replace the scan's numbers on the row with the live ones.
     local first = SafeCall(C_AuctionHouse.GetCommoditySearchResultInfo, r.itemID, 1)
     r.qty, r.cost, r.profit, r.live = qty, cost, value - cost, true
-    if first and first.unitPrice then r.bestUnit, r.bestSource = first.unitPrice, "live trade-goods price (per item)" end
+    if first and first.unitPrice then r.bestUnit = first.unitPrice end   -- lowest live price, as the AH shows it
     if ui then ui:Refresh() end
     Print(string.format("%s: %d can be bought below vendor price right now (%s total, profit %s).",
       ItemName(r), qty, Money(cost), Money(value - cost)))
@@ -1708,7 +1709,7 @@ local function BuildUI()
 
   -- column layouts per tab: { header text, x (relative to the frame), width }
   local LAYOUTS = {
-    buyout = { { "Item", 58, 200 }, { "Qty", 262, 40 }, { "Cheapest/ea", 302, 90 }, { "Vendor/ea", 392, 80 }, { "Profit", 472, 68 } },
+    buyout = { { "Item", 58, 200 }, { "Qty", 262, 40 }, { "Cheapest", 302, 90 }, { "Vendor/ea", 392, 80 }, { "Profit", 472, 68 } },
     bid    = { { "Item", 58, 150 }, { "Qty", 212, 30 }, { "Next bid", 244, 80 }, { "Buyout", 326, 80 }, { "Time left", 408, 60 }, { "Profit", 470, 70 } },
   }
   f.headers = {}
@@ -1830,22 +1831,11 @@ local function BuildUI()
       else
         GameTooltip:AddLine(string.format("%d auctions, %d items, total cost %s",
           d.auctions, d.qty, Money(d.cost)), 1, 1, 1)
-        if d.live and d.bestSource then
-          GameTooltip:AddLine("Cheapest/ea " .. Money(d.bestUnit) .. ": " .. d.bestSource .. ".", 0.8, 0.8, 1, true)
-        else
-          local mode, from = ItemMode(d.itemID)
-          if mode == "unit" and d.minRaw then
-            GameTooltip:AddLine(string.format("Cheapest/ea %s: Full Scan listing of %d priced %s per item (reading detected for %s).",
-              Money(d.minRaw), d.minRawCount or 0, Money(d.minRaw), from or "?"), 0.8, 0.8, 1, true)
-          elseif d.cheapStackPrice then
-            GameTooltip:AddLine(string.format("Cheapest/ea %s: Full Scan listing of %d for %s in total, divided by %d (%s).",
-              Money(d.minPerItem), d.cheapStackCount or 0, Money(d.cheapStackPrice), d.cheapStackCount or 0,
-              from and ("reading detected for " .. from) or "reading not detected yet, assumed per stack"), 0.8, 0.8, 1, true)
-          end
+        if d.bestUnit and d.bestUnit < math.huge then
+          GameTooltip:AddLine("Cheapest buyout: " .. Money(d.bestUnit) .. (d.live and " (live)" or " (Full Scan)"), 0.8, 0.8, 1)
         end
-        GameTooltip:AddLine(d.live and "Numbers updated from the live search (exact)." or
-          ("Numbers from the Full Scan" .. (PriceMode() and "" or " (price reading not detected yet, Cheapest/ea assumes stack prices)")
-           .. "; the live search before buying uses exact current prices."), 0.7, 0.7, 0.7, true)
+        GameTooltip:AddLine(d.live and "Numbers updated from the live search." or
+          "Numbers from the Full Scan; the live search before buying uses the current prices.", 0.7, 0.7, 0.7, true)
       end
       GameTooltip:AddLine("Click: search on AH   Right-click / tick: select   Shift-click: link", 0.6, 0.6, 0.6)
       GameTooltip:Show()
@@ -1956,8 +1946,8 @@ function handlers.ADDON_LOADED(arg1)
   if type(VendorSnipeDB.results) == "table" then
     results = VendorSnipeDB.results
     for _, r in ipairs(results) do
-      r.selected, r.done, r.live, r.bestSource = false, false, nil, nil
-      if r.minPerItem or r.minRaw then r.bestUnit = ScanUnitPrice(r) end
+      r.selected, r.done, r.live = false, false, nil
+      if r.minRaw then r.bestUnit = r.minRaw end
       byItem[r.itemID] = r
     end
   end
