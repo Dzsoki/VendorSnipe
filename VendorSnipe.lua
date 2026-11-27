@@ -1201,16 +1201,29 @@ end
 -- Buy.inflight = the offer being bought, Buy.money = gold just before that purchase.
 -- Buy.limbo = an offer we gave up waiting for; if its gold leaves later, it's still counted.
 
-local function RecordPurchase(o, spent, item, late)
-  -- quantity actually received: if the gold paid differs from the quote, scale the amount
+local RecordPurchase
+function RecordPurchase(o, spent, item, late)
+  -- Quantity received. A purchase can never deliver more than the listing had, so:
+  --  * charge matches the quote (per-item or full listing price) -> the full quantity
+  --  * MORE gold left than this listing costs -> another charge landed in the same gold update:
+  --    count only this listing's price; the rest shows up in the summary's gold-change note
+  --  * LESS gold left -> only part was filled: scale the quantity down
   local qty = o.qty
   local function near(a, b) return math.abs(a - b) <= math.max(1, b * 0.01) end
   local full = o.total or o.cost          -- what the whole listing costs
   local exact = near(spent, o.cost) or near(spent, full)
-  if not exact and full > 0 then qty = math.max(0, math.floor(o.qty * spent / full + 0.5)) end
+  local note, extra = "", 0
+  if not exact and full > 0 then
+    if spent > full then
+      D("charge", spent, "is more than this purchase costs", full, "- counting", full)
+      extra, spent = spent - full, full
+    else
+      qty = math.max(0, math.floor(o.qty * spent / full + 0.5))
+      note = " (quoted " .. Money(full) .. ", partly filled)"
+    end
+  end
   local value = (o.value / math.max(o.qty, 1)) * qty
   Buy.spent, Buy.value, Buy.count, Buy.items = Buy.spent + spent, Buy.value + value, Buy.count + 1, Buy.items + qty
-  local note = exact and "" or (" (quoted " .. Money(full) .. ")")
   local prefix = late and "Late confirmation: " or ""
   if o.kind == "bid" then
     Print(string.format("%sBid placed on %dx %s: %s held%s (%s left). You win it if nobody outbids you.",
@@ -1218,6 +1231,15 @@ local function RecordPurchase(o, spent, item, late)
   else
     Print(string.format("%sBought %dx %s, paid %s%s (vendor value %s, profit %s).",
       prefix, qty, ItemName(item), Money(spent), note, Money(value), Money(value - spent)))
+  end
+  -- the extra gold may be a delayed charge for a purchase we had given up waiting for
+  local L = Buy.limbo
+  if extra > 0 and L and L.o ~= o then
+    local lfull = L.o.total or L.o.cost
+    if near(extra, L.o.cost) or near(extra, lfull) then
+      Buy.limbo = nil
+      RecordPurchase(L.o, extra, L.item, true)
+    end
   end
 end
 
